@@ -1,0 +1,1018 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="h-full bg-slate-900 text-slate-100">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Minha Casa - Gerenciador Familiar</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+  </style>
+</head>
+<body class="h-full flex flex-col overflow-hidden select-none">
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    const appId = 'minha-casa-app-v2';
+    window.appId = appId; window.doc = doc; window.setDoc = setDoc; window.onSnapshot = onSnapshot;
+    window.initFirebaseSyncModules = async function() {
+      const savedConfig = localStorage.getItem('minha_casa_firebase_config');
+      if (!savedConfig) {
+        document.getElementById('firebaseSetup')?.classList.remove('hidden');
+        if (document.getElementById('connectionStatus')) document.getElementById('connectionStatus').textContent = 'Configure a sincronização';
+        return;
+      }
+      try {
+        const firebaseConfig = JSON.parse(savedConfig);
+        if (!firebaseConfig.apiKey || !firebaseConfig.projectId || !firebaseConfig.appId) throw new Error('Configuração incompleta: confira apiKey, projectId e appId.');
+        const app = initializeApp(firebaseConfig, 'minha-casa-runtime');
+        const auth = getAuth(app); const db = getFirestore(app);
+        window.db = db; window.auth = auth;
+        window.setConnectionStatus?.('Conectando...');
+        await signInAnonymously(auth);
+        const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'houseState', 'mainDocV2');
+        onSnapshot(docRef, (docSnap) => {
+          if (docSnap.exists()) { appData = { ...DEFAULT_DATA, ...docSnap.data() }; renderApp(); }
+          else { saveDataToCloud(DEFAULT_DATA); }
+          window.setConnectionStatus?.('Sincronizado');
+          document.getElementById('firebaseSetup')?.classList.add('hidden');
+        }, (error) => {
+          console.error('Erro na escuta do Firestore:', error);
+          window.setConnectionStatus?.('Erro de sincronização');
+          showToast('Erro ao sincronizar. Confira as regras do Firestore.');
+        });
+      } catch (e) {
+        console.error('Erro ao conectar Firebase:', e);
+        window.setConnectionStatus?.('Configuração inválida');
+        const err = document.getElementById('firebaseSetupError'); if (err) err.textContent = e.message || 'Não foi possível conectar ao Firebase.';
+        document.getElementById('firebaseSetup')?.classList.remove('hidden');
+      }
+    };
+  </script>
+
+  <script>
+    const DEFAULT_ROOMS = {
+      quintal: { id: 'quintal', name: 'Quintal', light: false, noLight: true },
+      banheiro_sup: { id: 'banheiro_sup', name: 'Banheiro (Sup)', light: false },
+      quarto_mae: { id: 'quarto_mae', name: 'Quarto Mãe', light: false },
+      quarto_fernando: { id: 'quarto_fernando', name: 'Quarto Fernando', light: false },
+      banheiro_central: { id: 'banheiro_central', name: 'Banheiro Central', light: false },
+      cozinha: { id: 'cozinha', name: 'Cozinha', light: false },
+      sala: { id: 'sala', name: 'Sala', light: false },
+      varanda: { id: 'varanda', name: 'Varanda', light: false },
+      corredor_esq: { id: 'corredor_esq', name: 'Corredor Esq.', light: false, noLight: true },
+      corredor_dir: { id: 'corredor_dir', name: 'Corredor Dir.', light: false }
+    };
+
+    const DEFAULT_MEMBERS_DATA = {
+      'Matheus': { location: 'Em casa', status: 'No Computador' },
+      'Eliziane': { location: 'Em casa', status: 'Ocupado' },
+      'Fernando': { location: 'Em casa', status: 'No Computador' },
+      'Wilker': { location: 'Fora de casa', status: 'Fora de casa' }
+    };
+
+    const DEFAULT_ELEMENTS = [
+      { id: 'p1', type: 'door', label: 'Portão Principal', top: 90, left: 50, open: false, locked: true },
+      { id: 'p2', type: 'door', label: 'Porta Entrada', top: 80, left: 45, open: false },
+      { id: 'p3', type: 'door', label: 'Porta Cozinha', top: 15, left: 75, open: false },
+      { id: 'p4', type: 'door', label: 'Porta Q. Fernando', top: 50, left: 88, open: false },
+      { id: 'p5', type: 'door', label: 'Porta Q. Mãe', top: 85, left: 88, open: false },
+      { id: 'j1', type: 'window', label: 'Janela Sala', top: 20, left: 10, open: false },
+      { id: 'j2', type: 'window', label: 'Janela Q. Fernando', top: 30, left: 10, open: false }
+    ];
+
+    const DEFAULT_DATA = {
+      gateLocked: true,
+      rooms: DEFAULT_ROOMS,
+      elements: DEFAULT_ELEMENTS,
+      membersData: DEFAULT_MEMBERS_DATA,
+      catFoodLevel: 75, // percent 0 - 100
+      tasks: [
+        { id: 't1', title: 'Lavar Louça almoço', done: false },
+        { id: 't2', title: 'Lavar Louça jantar', done: false },
+        { id: 't3', title: 'Dar sachê pros gatos', done: true },
+        { id: 't4', title: 'Limpar areia dos gatos', done: false }
+      ],
+      fridgeItems: [
+        { id: 'f1', name: 'Leite', qty: '2 Litros', category: 'Laticínios' },
+        { id: 'f2', name: 'Ovos', qty: '12 unidades', category: 'Geral' },
+        { id: 'f3', name: 'Sachê de Gato', qty: '6 unidades', category: 'Pets' }
+      ],
+      shoppingList: [
+        { id: 's1', name: 'Ração para Gatos', qty: '1 pacote grande', bought: false },
+        { id: 's2', name: 'Papel Higiênico', qty: '1 pacote', bought: false }
+      ],
+      members: ['Matheus', 'Eliziane', 'Fernando', 'Wilker']
+    };
+
+    let appData = JSON.parse(JSON.stringify(DEFAULT_DATA));
+    let currentTab = 'mapa';
+    let editMode = false;
+    let currentUser = localStorage.getItem('minha_casa_user') || 'Fernando';
+
+    async function saveDataToCloud(newData) {
+      try {
+        appData = newData;
+        renderApp();
+        const docRef = window.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'houseState', 'mainDocV2');
+        await window.setDoc(docRef, newData, { merge: true });
+      } catch (err) {
+        console.error("Erro ao salvar dados:", err);
+        showToast("Erro ao sincronizar alteração!");
+      }
+    }
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.innerText = msg;
+      toast.classList.remove('opacity-0', 'pointer-events-none');
+      setTimeout(() => {
+        toast.classList.add('opacity-0', 'pointer-events-none');
+      }, 2500);
+    }
+  </script>
+
+  <header class="bg-slate-800/90 backdrop-blur-md border-b border-slate-700 px-4 py-3 flex items-center justify-between z-20">
+    <div class="flex items-center space-x-3">
+      <div class="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-indigo-500/20">
+        <i class="fa-solid fa-house-chimney"></i>
+      </div>
+      <div>
+        <h1 class="text-lg font-bold text-white leading-tight">Minha Casa</h1>
+        <p class="text-xs text-slate-400 flex items-center gap-1">
+          <span id="connectionDot" class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+          <span id="connectionStatus">Configure a sincronização</span>
+        </p>
+      </div>
+    </div>
+
+    <!-- User Profile Selector -->
+    <div class="flex items-center space-x-2">
+      <label class="text-xs text-slate-400 hidden sm:inline">Eu sou:</label>
+      <select id="userSelect" onchange="changeUser(this.value)" class="bg-slate-900 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-1.5 focus:ring-2 focus:ring-indigo-500 font-medium">
+        <option value="Matheus">Matheus</option>
+        <option value="Eliziane">Eliziane</option>
+        <option value="Fernando">Fernando</option>
+        <option value="Wilker">Wilker</option>
+      </select>
+    </div>
+  </header>
+
+  <main class="flex-1 flex flex-col md:flex-row overflow-hidden relative">
+    
+    <!-- Sidebar Navigation -->
+    <nav class="order-2 md:order-1 bg-slate-800 border-t md:border-t-0 md:border-r border-slate-700 flex md:flex-col justify-around md:justify-start p-2 gap-1 z-20 shrink-0 overflow-x-auto">
+      <button onclick="switchTab('mapa')" id="btn-tab-mapa" class="tab-btn active flex flex-col md:flex-row items-center gap-2 p-2.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-700/50 transition">
+        <i class="fa-solid fa-map text-base"></i>
+        <span>Mapa</span>
+      </button>
+
+      <button onclick="switchTab('pessoas')" id="btn-tab-pessoas" class="tab-btn flex flex-col md:flex-row items-center gap-2 p-2.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-700/50 transition">
+        <i class="fa-solid fa-users text-base"></i>
+        <span>Pessoas</span>
+      </button>
+
+      <button onclick="switchTab('tarefas')" id="btn-tab-tarefas" class="tab-btn flex flex-col md:flex-row items-center gap-2 p-2.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-700/50 transition relative">
+        <i class="fa-solid fa-list-check text-base"></i>
+        <span>Tarefas</span>
+        <span id="badge-tasks" class="hidden absolute top-1 right-2 bg-amber-500 text-slate-950 font-bold text-[10px] px-1.5 rounded-full">0</span>
+      </button>
+
+      <button onclick="switchTab('geladeira')" id="btn-tab-geladeira" class="tab-btn flex flex-col md:flex-row items-center gap-2 p-2.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-700/50 transition">
+        <i class="fa-solid fa-kitchen-set text-base"></i>
+        <span>Geladeira</span>
+      </button>
+
+      <button onclick="switchTab('compras')" id="btn-tab-compras" class="tab-btn flex flex-col md:flex-row items-center gap-2 p-2.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-700/50 transition">
+        <i class="fa-solid fa-cart-shopping text-base"></i>
+        <span>Compras</span>
+      </button>
+
+      <button onclick="switchTab('gatos')" id="btn-tab-gatos" class="tab-btn flex flex-col md:flex-row items-center gap-2 p-2.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-700/50 transition">
+        <i class="fa-solid fa-cat text-base"></i>
+        <span>Gatos</span>
+      </button>
+
+      <button onclick="switchTab('seguranca')" id="btn-tab-seguranca" class="tab-btn flex flex-col md:flex-row items-center gap-2 p-2.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-700/50 transition">
+        <i class="fa-solid fa-shield-halved text-base"></i>
+        <span>Portão</span>
+      </button>
+    </nav>
+
+    <!-- Main Content Area -->
+    <div class="order-1 md:order-2 flex-1 overflow-y-auto p-3 sm:p-6 bg-slate-900/50 relative">
+      
+      <!-- TAB 1: MAPA DA CASA -->
+      <section id="tab-mapa" class="tab-content h-full flex flex-col max-w-4xl mx-auto">
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-4 bg-slate-800 p-3 rounded-2xl border border-slate-700">
+          <div class="flex items-center space-x-2">
+            <button onclick="toggleGateLock()" id="quick-gate-btn" class="px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-2 transition">
+              <i id="quick-gate-icon" class="fa-solid fa-lock"></i>
+              <span id="quick-gate-text">Portão</span>
+            </button>
+            <div class="h-6 w-px bg-slate-700"></div>
+            <span class="text-xs text-slate-400">Toque em qualquer cômodo para acender/apagar a luz</span>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <button onclick="toggleEditMode()" id="btn-edit-mode" class="px-3 py-1.5 rounded-xl border border-slate-600 bg-slate-700 hover:bg-slate-600 text-xs font-semibold text-slate-200 flex items-center gap-1.5 transition">
+              <i class="fa-solid fa-arrows-up-down-left-right text-xs"></i>
+              <span id="edit-mode-text">Posicionar Portas/Janelas</span>
+            </button>
+            <button onclick="openAddElementModal()" id="btn-add-element" class="hidden px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white flex items-center gap-1 transition">
+              <i class="fa-solid fa-plus"></i> Novo Item
+            </button>
+          </div>
+        </div>
+
+        <!-- Blueprint Layout Container -->
+        <div class="flex-1 flex justify-center items-start overflow-auto py-2">
+          <div id="house-blueprint" class="relative w-full max-w-[420px] min-h-[750px] bg-slate-950 rounded-2xl border-4 border-slate-800 p-3 shadow-2xl flex flex-col gap-2 transition-all">
+            
+            <!-- Quintal (Sem Luz) -->
+            <div id="room-quintal" class="room-box relative min-h-[90px] bg-slate-800/60 border-2 border-slate-700 rounded-xl p-2 flex flex-col justify-between">
+              <div class="flex justify-between items-start">
+                <span class="font-bold text-slate-200 text-sm tracking-wide">Quintal</span>
+              </div>
+            </div>
+
+            <!-- Middle Grid -->
+            <div class="grid grid-cols-12 gap-2 flex-1">
+              <!-- Left Corredor (Sem Luz) -->
+              <div id="room-corredor_esq" class="col-span-2 bg-slate-800/40 border-2 border-slate-700/80 rounded-xl p-1 flex flex-col justify-between items-center text-center py-4">
+                <span class="text-[10px] font-bold text-slate-400 tracking-widest [writing-mode:vertical-lr] rotate-180 uppercase">Corredor</span>
+              </div>
+
+              <!-- Stack of Rooms -->
+              <div class="col-span-8 flex flex-col gap-2">
+                <div id="room-banheiro_sup" onclick="toggleRoomLight('banheiro_sup')" class="room-box relative min-h-[65px] bg-slate-800/60 border-2 border-slate-700 rounded-xl p-2 cursor-pointer hover:border-slate-500 flex flex-col justify-between">
+                  <div class="flex justify-between items-center">
+                    <span class="font-semibold text-slate-300 text-xs">Banheiro (Sup)</span>
+                    <i id="light-icon-banheiro_sup" class="fa-solid fa-lightbulb text-slate-600 text-xs"></i>
+                  </div>
+                </div>
+
+                <div id="room-quarto_mae" onclick="toggleRoomLight('quarto_mae')" class="room-box relative min-h-[100px] bg-slate-800/60 border-2 border-slate-700 rounded-xl p-2 cursor-pointer hover:border-slate-500 flex flex-col justify-between">
+                  <div class="flex justify-between items-center">
+                    <span class="font-bold text-slate-200 text-sm">Quarto Mãe</span>
+                    <i id="light-icon-quarto_mae" class="fa-solid fa-lightbulb text-slate-600 text-sm"></i>
+                  </div>
+                </div>
+
+                <div id="room-quarto_fernando" onclick="toggleRoomLight('quarto_fernando')" class="room-box relative min-h-[100px] bg-slate-800/60 border-2 border-slate-700 rounded-xl p-2 cursor-pointer hover:border-slate-500 flex flex-col justify-between">
+                  <div class="flex justify-between items-center">
+                    <span class="font-bold text-slate-200 text-sm">Quarto Fernando</span>
+                    <i id="light-icon-quarto_fernando" class="fa-solid fa-lightbulb text-slate-600 text-sm"></i>
+                  </div>
+                </div>
+
+                <div id="room-banheiro_central" onclick="toggleRoomLight('banheiro_central')" class="room-box relative min-h-[65px] bg-slate-800/60 border-2 border-slate-700 rounded-xl p-2 cursor-pointer hover:border-slate-500 flex flex-col justify-between">
+                  <div class="flex justify-between items-center">
+                    <span class="font-bold text-slate-300 text-xs uppercase tracking-wider">Banheiro Central</span>
+                    <i id="light-icon-banheiro_central" class="fa-solid fa-lightbulb text-slate-600 text-xs"></i>
+                  </div>
+                </div>
+
+                <div id="room-cozinha" onclick="toggleRoomLight('cozinha')" class="room-box relative min-h-[90px] bg-slate-800/60 border-2 border-slate-700 rounded-xl p-2 cursor-pointer hover:border-slate-500 flex flex-col justify-between">
+                  <div class="flex justify-between items-center">
+                    <span class="font-extrabold text-slate-100 text-base uppercase tracking-widest">Cozinha</span>
+                    <i id="light-icon-cozinha" class="fa-solid fa-lightbulb text-slate-600 text-sm"></i>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Right Corredor -->
+              <div id="room-corredor_dir" onclick="toggleRoomLight('corredor_dir')" class="col-span-2 bg-slate-800/40 border-2 border-slate-700/80 rounded-xl p-1 flex flex-col justify-between items-center text-center cursor-pointer hover:border-slate-500 py-4">
+                <span class="text-[10px] font-bold text-slate-400 tracking-widest [writing-mode:vertical-lr] uppercase">Corredor</span>
+                <i id="light-icon-corredor_dir" class="fa-solid fa-lightbulb text-slate-600 text-xs"></i>
+              </div>
+            </div>
+
+            <!-- Sala -->
+            <div id="room-sala" onclick="toggleRoomLight('sala')" class="room-box relative min-h-[110px] bg-slate-800/60 border-2 border-slate-700 rounded-xl p-3 cursor-pointer hover:border-slate-500 flex flex-col justify-between mt-1">
+              <div class="flex justify-between items-center">
+                <span class="font-black text-slate-100 text-2xl tracking-widest">Sala</span>
+                <i id="light-icon-sala" class="fa-solid fa-lightbulb text-slate-600 text-lg"></i>
+              </div>
+            </div>
+
+            <!-- Varanda -->
+            <div id="room-varanda" onclick="toggleRoomLight('varanda')" class="room-box relative min-h-[85px] bg-slate-800/60 border-2 border-slate-700 rounded-xl p-3 cursor-pointer hover:border-slate-500 flex flex-col justify-between mt-1">
+              <div class="flex justify-between items-center">
+                <span class="font-extrabold text-slate-200 text-lg tracking-wider">Varanda</span>
+                <i id="light-icon-varanda" class="fa-solid fa-lightbulb text-slate-600 text-base"></i>
+              </div>
+            </div>
+
+            <!-- Interactive Doors/Windows Overlay -->
+            <div id="interactive-elements-layer" class="absolute inset-0 pointer-events-none"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: STATUS DAS PESSOAS -->
+      <section id="tab-pessoas" class="tab-content hidden max-w-3xl mx-auto space-y-4">
+        <div class="bg-slate-800 p-4 sm:p-6 rounded-2xl border border-slate-700 space-y-4">
+          <div>
+            <h2 class="text-xl font-bold text-white">Status dos Moradores</h2>
+            <p class="text-xs text-slate-400">Visualize e atualize a presença e o status de Matheus, Eliziane, Fernando e Wilker</p>
+          </div>
+
+          <div id="members-status-container" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <!-- Populated dynamically -->
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: TAREFAS -->
+      <section id="tab-tarefas" class="tab-content hidden max-w-3xl mx-auto space-y-4">
+        <div class="flex items-center justify-between bg-slate-800 p-4 rounded-2xl border border-slate-700">
+          <div>
+            <h2 class="text-xl font-bold text-white">Tarefas da Casa</h2>
+            <p class="text-xs text-slate-400">Tarefas familiares e cuidados com os pets</p>
+          </div>
+          <button onclick="openAddTaskModal()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-xl shadow-lg shadow-indigo-600/30 flex items-center gap-2 transition">
+            <i class="fa-solid fa-plus"></i> Nova Tarefa
+          </button>
+        </div>
+
+        <div id="tasks-list" class="space-y-2">
+          <!-- Populated dynamically -->
+        </div>
+      </section>
+
+      <!-- TAB 4: GELADEIRA -->
+      <section id="tab-geladeira" class="tab-content hidden max-w-3xl mx-auto space-y-4">
+        <div class="flex items-center justify-between bg-slate-800 p-4 rounded-2xl border border-slate-700">
+          <div>
+            <h2 class="text-xl font-bold text-white">Alimentos na Geladeira</h2>
+            <p class="text-xs text-slate-400">Controle de mantimentos disponíveis</p>
+          </div>
+          <button onclick="openAddFridgeModal()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs rounded-xl shadow-lg shadow-emerald-600/30 flex items-center gap-2 transition">
+            <i class="fa-solid fa-plus"></i> Adicionar Alimento
+          </button>
+        </div>
+
+        <div id="fridge-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <!-- Populated dynamically -->
+        </div>
+      </section>
+
+      <!-- TAB 5: LISTA DE COMPRAS -->
+      <section id="tab-compras" class="tab-content hidden max-w-3xl mx-auto space-y-4">
+        <div class="flex items-center justify-between bg-slate-800 p-4 rounded-2xl border border-slate-700">
+          <div>
+            <h2 class="text-xl font-bold text-white">Lista de Compras</h2>
+            <p class="text-xs text-slate-400">Itens necessários para comprar no mercado</p>
+          </div>
+          <button onclick="openAddShoppingModal()" class="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white font-semibold text-xs rounded-xl shadow-lg shadow-sky-600/30 flex items-center gap-2 transition">
+            <i class="fa-solid fa-plus"></i> Adicionar Item
+          </button>
+        </div>
+
+        <div id="shopping-list-container" class="space-y-2">
+          <!-- Populated dynamically -->
+        </div>
+      </section>
+
+      <!-- TAB 6: GATOS E RAÇÃO -->
+      <section id="tab-gatos" class="tab-content hidden max-w-3xl mx-auto space-y-4">
+        <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 space-y-6">
+          <div>
+            <h2 class="text-xl font-bold text-white flex items-center gap-2">
+              <i class="fa-solid fa-cat text-amber-400"></i> Alimentação dos Gatos
+            </h2>
+            <p class="text-xs text-slate-400 mt-1">Monitore o nível do pote ou estoque de ração dos gatinhos</p>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-700/80 p-5 rounded-xl space-y-4">
+            <div class="flex justify-between items-center">
+              <span class="text-sm font-bold text-slate-200">Nível do Pote de Ração</span>
+              <span id="cat-food-percentage" class="text-base font-extrabold text-amber-400">75%</span>
+            </div>
+
+            <!-- Food Bar -->
+            <div class="w-full bg-slate-800 h-6 rounded-full overflow-hidden p-1 border border-slate-700">
+              <div id="cat-food-bar" class="bg-gradient-to-r from-amber-600 to-amber-400 h-full rounded-full transition-all duration-300" style="width: 75%;"></div>
+            </div>
+
+            <!-- Quick adjustment buttons -->
+            <div class="grid grid-cols-4 gap-2 pt-2">
+              <button onclick="updateCatFood(0)" class="py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs font-bold text-rose-400">Vazio (0%)</button>
+              <button onclick="updateCatFood(35)" class="py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs font-bold text-amber-300">Baixo (35%)</button>
+              <button onclick="updateCatFood(70)" class="py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs font-bold text-sky-300">Bom (70%)</button>
+              <button onclick="updateCatFood(100)" class="py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs font-bold text-emerald-400">Cheio (100%)</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 7: SEGURANÇA / PORTÃO -->
+      <section id="tab-seguranca" class="tab-content hidden max-w-3xl mx-auto space-y-4">
+        <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 space-y-6">
+          <div class="flex items-center justify-between">
+            <div>
+              <h2 class="text-xl font-bold text-white">Segurança do Portão</h2>
+              <p class="text-xs text-slate-400">Controle de acesso e tranca da entrada</p>
+            </div>
+            <div id="gate-status-badge" class="px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">--</div>
+          </div>
+
+          <div class="p-6 bg-slate-900 rounded-xl border border-slate-700/80 text-center space-y-4">
+            <div class="w-20 h-20 mx-auto rounded-full bg-slate-800 border-2 border-slate-700 flex items-center justify-center text-3xl">
+              <i id="gate-status-icon" class="fa-solid fa-lock text-slate-400"></i>
+            </div>
+            <div>
+              <h3 id="gate-status-title" class="text-lg font-bold text-slate-200">Carregando...</h3>
+              <p id="gate-status-desc" class="text-xs text-slate-400 mt-1">Status sincronizado da entrada</p>
+            </div>
+
+            <div class="flex justify-center gap-3 pt-2">
+              <button onclick="setGateStatus(true)" class="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/20 transition flex items-center gap-2">
+                <i class="fa-solid fa-lock"></i> Trancar Portão
+              </button>
+              <button onclick="setGateStatus(false)" class="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/20 transition flex items-center gap-2">
+                <i class="fa-solid fa-lock-open"></i> Destrancar
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- MODALS -->
+  <div id="modal-task" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-md p-5 shadow-2xl space-y-4">
+      <h3 class="text-lg font-bold text-white">Nova Tarefa</h3>
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Título</label>
+          <input type="text" id="task-input-title" placeholder="Ex: Lavar louça..." class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500">
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 pt-2">
+        <button onclick="closeModal('modal-task')" class="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:bg-slate-700">Cancelar</button>
+        <button onclick="saveNewTask()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-xl">Salvar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-fridge" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-md p-5 shadow-2xl space-y-4">
+      <h3 class="text-lg font-bold text-white">Adicionar à Geladeira</h3>
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Nome</label>
+          <input type="text" id="fridge-input-name" placeholder="Ex: Queijo, Leite..." class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-sm text-white">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Quantidade</label>
+          <input type="text" id="fridge-input-qty" placeholder="Ex: 1 litro, 300g..." class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-sm text-white">
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 pt-2">
+        <button onclick="closeModal('modal-fridge')" class="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:bg-slate-700">Cancelar</button>
+        <button onclick="saveNewFridgeItem()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs rounded-xl">Salvar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-shopping" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-md p-5 shadow-2xl space-y-4">
+      <h3 class="text-lg font-bold text-white">Adicionar à Lista de Compras</h3>
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Nome do Item</label>
+          <input type="text" id="shopping-input-name" placeholder="Ex: Arroz, Detergente..." class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-sm text-white">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Quantidade</label>
+          <input type="text" id="shopping-input-qty" placeholder="Ex: 2 pacotes..." class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-sm text-white">
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 pt-2">
+        <button onclick="closeModal('modal-shopping')" class="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:bg-slate-700">Cancelar</button>
+        <button onclick="saveNewShoppingItem()" class="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white font-semibold text-xs rounded-xl">Adicionar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-element" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-md p-5 shadow-2xl space-y-4">
+      <h3 class="text-lg font-bold text-white">Nova Porta ou Janela</h3>
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Tipo</label>
+          <select id="element-input-type" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-sm text-white">
+            <option value="door">Porta</option>
+            <option value="window">Janela</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Nome</label>
+          <input type="text" id="element-input-label" placeholder="Ex: Porta Corredor" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-sm text-white">
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 pt-2">
+        <button onclick="closeModal('modal-element')" class="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:bg-slate-700">Cancelar</button>
+        <button onclick="saveNewElement()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-xl">Adicionar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="fixed bottom-16 md:bottom-6 right-6 bg-slate-800 border border-indigo-500/50 text-indigo-200 px-4 py-2.5 rounded-xl shadow-2xl text-xs font-medium pointer-events-none transition-all duration-300 opacity-0 z-50">
+    Toast
+  </div>
+
+  <div id="firebaseSetup" class="hidden fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+    <div class="w-full max-w-xl rounded-2xl border border-slate-700 bg-slate-900 p-5 shadow-2xl my-auto">
+      <div class="flex items-center gap-3 mb-3"><div class="w-11 h-11 rounded-xl bg-indigo-600 flex items-center justify-center"><i class="fa-solid fa-cloud text-white text-lg"></i></div><div><h2 class="text-xl font-bold text-white">Ativar multiplayer</h2><p class="text-sm text-slate-400">Configure uma vez para sincronizar os celulares</p></div></div>
+      <p class="text-sm text-slate-300 mb-3">O visual do Minha Casa foi mantido. Para compartilhar alterações entre celulares, é necessário um projeto Firebase gratuito. Ative <b>Authentication → Anonymous</b>, crie um banco <b>Cloud Firestore</b> e cole aqui a configuração do seu app Web.</p>
+      <label for="firebaseConfigInput" class="block text-xs font-semibold text-slate-300 mb-2">Configuração Firebase (JSON)</label>
+      <textarea id="firebaseConfigInput" rows="7" autocapitalize="off" spellcheck="false" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","storageBucket":"...","messagingSenderId":"...","appId":"..."}' class="w-full rounded-xl border border-slate-700 bg-slate-950 text-slate-100 p-3 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+      <p id="firebaseSetupError" class="text-sm text-rose-300 mt-2"></p>
+      <div class="rounded-xl bg-amber-500/10 border border-amber-500/20 p-3 mt-3 text-xs text-amber-100">As regras do Firestore também precisam permitir leitura e gravação no caminho usado pelo app. Não coloque informações privadas da família nesse banco.</div>
+      <div class="flex flex-wrap gap-2 mt-4"><button onclick="saveFirebaseConfig()" class="flex-1 rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-bold text-white">Salvar e conectar</button><button onclick="document.getElementById('firebaseSetup').classList.add('hidden')" class="rounded-xl bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm font-semibold text-slate-200">Fechar</button></div>
+      <button onclick="localStorage.removeItem('minha_casa_firebase_config'); location.reload()" class="mt-3 text-xs text-slate-400 underline">Trocar ou apagar configuração salva</button>
+    </div>
+  </div>
+  <script>
+    window.setConnectionStatus = function(message) { const label=document.getElementById('connectionStatus'); const dot=document.getElementById('connectionDot'); if(label) label.textContent=message; if(dot) dot.className='w-2 h-2 rounded-full '+(message==='Sincronizado'?'bg-emerald-500':'bg-amber-400')+' animate-pulse'; };
+    window.saveFirebaseConfig = function() { const box=document.getElementById('firebaseConfigInput'); const error=document.getElementById('firebaseSetupError'); try { const config=JSON.parse(box.value.trim()); if(!config.apiKey||!config.projectId||!config.appId) throw new Error('Faltam campos obrigatórios: apiKey, projectId ou appId.'); localStorage.setItem('minha_casa_firebase_config',JSON.stringify(config)); error.textContent=''; location.reload(); } catch(e) { error.textContent='JSON inválido: '+(e.message||'confira o texto colado.'); } };
+  </script>
+
+  <script>
+    function switchTab(tabId) {
+      currentTab = tabId;
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('text-indigo-400', 'bg-slate-700/80', 'active');
+        btn.classList.add('text-slate-400');
+      });
+
+      document.getElementById(`tab-${tabId}`).classList.remove('hidden');
+      const activeBtn = document.getElementById(`btn-tab-${tabId}`);
+      if (activeBtn) {
+        activeBtn.classList.add('text-indigo-400', 'bg-slate-700/80', 'active');
+        activeBtn.classList.remove('text-slate-400');
+      }
+    }
+
+    function changeUser(val) {
+      currentUser = val;
+      localStorage.setItem('minha_casa_user', val);
+      renderApp();
+      showToast(`Perfil alterado para: ${val}`);
+    }
+
+    function toggleRoomLight(roomId) {
+      if (editMode) return;
+      if (!appData.rooms[roomId] || appData.rooms[roomId].noLight) return;
+      const newRooms = { ...appData.rooms };
+      newRooms[roomId].light = !newRooms[roomId].light;
+      saveDataToCloud({ ...appData, rooms: newRooms });
+    }
+
+    function toggleGateLock() {
+      setGateStatus(!appData.gateLocked);
+    }
+
+    function setGateStatus(status) {
+      saveDataToCloud({ ...appData, gateLocked: status });
+      showToast(status ? "Portão Trancado!" : "Portão Destrancado!");
+    }
+
+    function toggleEditMode() {
+      editMode = !editMode;
+      const btn = document.getElementById('btn-edit-mode');
+      const addBtn = document.getElementById('btn-add-element');
+      const text = document.getElementById('edit-mode-text');
+
+      if (editMode) {
+        btn.classList.replace('bg-slate-700', 'bg-amber-600');
+        btn.classList.replace('border-slate-600', 'border-amber-500');
+        text.innerText = 'Concluir';
+        addBtn.classList.remove('hidden');
+        showToast('Modo de Edição: Arraste portas e janelas');
+      } else {
+        btn.classList.replace('bg-amber-600', 'bg-slate-700');
+        btn.classList.replace('border-amber-500', 'border-slate-600');
+        text.innerText = 'Posicionar Portas/Janelas';
+        addBtn.classList.add('hidden');
+      }
+      renderInteractiveElements();
+    }
+
+    // Tasks
+    function toggleTask(taskId) {
+      const tasks = appData.tasks.map(t => t.id === taskId ? { ...t, done: !t.done } : t);
+      saveDataToCloud({ ...appData, tasks });
+    }
+
+    function deleteTask(taskId) {
+      const tasks = appData.tasks.filter(t => t.id !== taskId);
+      saveDataToCloud({ ...appData, tasks });
+    }
+
+    function saveNewTask() {
+      const title = document.getElementById('task-input-title').value.trim();
+      if (!title) return;
+      const tasks = [...(appData.tasks || []), { id: 't_' + Date.now(), title, done: false }];
+      saveDataToCloud({ ...appData, tasks });
+      closeModal('modal-task');
+      document.getElementById('task-input-title').value = '';
+    }
+
+    // Fridge
+    function deleteFridgeItem(itemId) {
+      const fridgeItems = appData.fridgeItems.filter(i => i.id !== itemId);
+      saveDataToCloud({ ...appData, fridgeItems });
+    }
+
+    function saveNewFridgeItem() {
+      const name = document.getElementById('fridge-input-name').value.trim();
+      const qty = document.getElementById('fridge-input-qty').value.trim() || '1 unid.';
+      if (!name) return;
+      const fridgeItems = [...(appData.fridgeItems || []), { id: 'f_' + Date.now(), name, qty }];
+      saveDataToCloud({ ...appData, fridgeItems });
+      closeModal('modal-fridge');
+      document.getElementById('fridge-input-name').value = '';
+      document.getElementById('fridge-input-qty').value = '';
+    }
+
+    // Shopping List
+    function toggleShoppingItem(itemId) {
+      const shoppingList = appData.shoppingList.map(s => s.id === itemId ? { ...s, bought: !s.bought } : s);
+      saveDataToCloud({ ...appData, shoppingList });
+    }
+
+    function deleteShoppingItem(itemId) {
+      const shoppingList = appData.shoppingList.filter(s => s.id !== itemId);
+      saveDataToCloud({ ...appData, shoppingList });
+    }
+
+    function saveNewShoppingItem() {
+      const name = document.getElementById('shopping-input-name').value.trim();
+      const qty = document.getElementById('shopping-input-qty').value.trim() || '1';
+      if (!name) return;
+      const shoppingList = [...(appData.shoppingList || []), { id: 's_' + Date.now(), name, qty, bought: false }];
+      saveDataToCloud({ ...appData, shoppingList });
+      closeModal('modal-shopping');
+      document.getElementById('shopping-input-name').value = '';
+      document.getElementById('shopping-input-qty').value = '';
+    }
+
+    // Members Status
+    function updateMemberLocation(memberName, location) {
+      const membersData = { ...appData.membersData };
+      if (!membersData[memberName]) membersData[memberName] = { location: 'Em casa', status: 'Ocupado' };
+      membersData[memberName].location = location;
+      saveDataToCloud({ ...appData, membersData });
+    }
+
+    function updateMemberStatus(memberName, status) {
+      const membersData = { ...appData.membersData };
+      if (!membersData[memberName]) membersData[memberName] = { location: 'Em casa', status: 'Ocupado' };
+      membersData[memberName].status = status;
+      saveDataToCloud({ ...appData, membersData });
+    }
+
+    // Cat food
+    function updateCatFood(val) {
+      saveDataToCloud({ ...appData, catFoodLevel: val });
+      showToast(`Nível de ração dos gatos atualizado para ${val}%`);
+    }
+
+    // Elements
+    function openAddElementModal() { document.getElementById('modal-element').classList.remove('hidden'); }
+    function saveNewElement() {
+      const type = document.getElementById('element-input-type').value;
+      const label = document.getElementById('element-input-label').value.trim() || 'Nova ' + type;
+      const elements = [...(appData.elements || []), { id: 'e_' + Date.now(), type, label, top: 50, left: 50, open: false }];
+      saveDataToCloud({ ...appData, elements });
+      closeModal('modal-element');
+    }
+    function deleteElement(id) {
+      const elements = appData.elements.filter(e => e.id !== id);
+      saveDataToCloud({ ...appData, elements });
+    }
+    function toggleElementOpen(id) {
+      if (editMode) return;
+      const elements = appData.elements.map(e => e.id === id ? { ...e, open: !e.open } : e);
+      saveDataToCloud({ ...appData, elements });
+    }
+
+    function openAddTaskModal() { document.getElementById('modal-task').classList.remove('hidden'); }
+    function openAddFridgeModal() { document.getElementById('modal-fridge').classList.remove('hidden'); }
+    function openAddShoppingModal() { document.getElementById('modal-shopping').classList.remove('hidden'); }
+    function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+    function renderApp() {
+      const uSelect = document.getElementById('userSelect');
+      if (uSelect) uSelect.value = currentUser;
+
+      renderRooms();
+      renderInteractiveElements();
+      renderMembersStatus();
+      renderTasks();
+      renderFridge();
+      renderShoppingList();
+      renderCatFood();
+      renderSecurityView();
+    }
+
+    function renderRooms() {
+      if (!appData.rooms) return;
+      Object.keys(appData.rooms).forEach(rId => {
+        const room = appData.rooms[rId];
+        const roomEl = document.getElementById(`room-${rId}`);
+        const iconEl = document.getElementById(`light-icon-${rId}`);
+
+        if (roomEl && !room.noLight) {
+          if (room.light) {
+            roomEl.classList.add('bg-amber-500/20', 'border-amber-400/80', 'shadow-lg', 'shadow-amber-500/10');
+            roomEl.classList.remove('bg-slate-800/60', 'border-slate-700');
+          } else {
+            roomEl.classList.remove('bg-amber-500/20', 'border-amber-400/80', 'shadow-lg', 'shadow-amber-500/10');
+            roomEl.classList.add('bg-slate-800/60', 'border-slate-700');
+          }
+        }
+
+        if (iconEl) {
+          if (room.light) {
+            iconEl.className = "fa-solid fa-lightbulb text-amber-400 animate-pulse text-base";
+          } else {
+            iconEl.className = "fa-solid fa-lightbulb text-slate-600 text-base";
+          }
+        }
+      });
+    }
+
+    function renderInteractiveElements() {
+      const container = document.getElementById('interactive-elements-layer');
+      if (!container) return;
+      container.innerHTML = '';
+
+      const elements = appData.elements || [];
+      elements.forEach(elem => {
+        const item = document.createElement('div');
+        item.className = `absolute pointer-events-auto flex items-center justify-center cursor-pointer transition-transform ${editMode ? 'ring-2 ring-amber-400 rounded p-1 bg-slate-900/90 z-30' : 'z-10'}`;
+        item.style.top = `${elem.top}%`;
+        item.style.left = `${elem.left}%`;
+
+        const isDoor = elem.type === 'door';
+        const iconClass = isDoor ? (elem.open ? 'fa-door-open text-amber-300' : 'fa-door-closed text-slate-300') : (elem.open ? 'fa-square text-sky-300' : 'fa-square text-slate-400');
+
+        item.innerHTML = `
+          <div class="flex items-center gap-1 bg-slate-900/90 border border-slate-700 px-1.5 py-0.5 rounded-lg shadow-md hover:scale-105 transition">
+            <i class="fa-solid ${iconClass} text-xs"></i>
+            <span class="text-[9px] font-semibold text-slate-200 leading-none">${elem.label}</span>
+            ${editMode ? `<button onclick="deleteElement('${elem.id}')" class="text-rose-400 hover:text-rose-300 ml-1"><i class="fa-solid fa-xmark text-[10px]"></i></button>` : ''}
+          </div>
+        `;
+
+        if (!editMode) {
+          item.onclick = (e) => { e.stopPropagation(); toggleElementOpen(elem.id); };
+        } else {
+          item.onmousedown = (e) => dragMouseDown(e, elem.id);
+          item.ontouchstart = (e) => dragTouchStart(e, elem.id);
+        }
+        container.appendChild(item);
+      });
+    }
+
+    function dragMouseDown(e, elemId) {
+      e.preventDefault();
+      const blueprint = document.getElementById('house-blueprint');
+      const rect = blueprint.getBoundingClientRect();
+      function elementDrag(ev) {
+        ev.preventDefault();
+        let leftPct = ((ev.clientX - rect.left) / rect.width) * 100;
+        let topPct = ((ev.clientY - rect.top) / rect.height) * 100;
+        updateElementPosition(elemId, Math.max(5, Math.min(92, topPct)), Math.max(5, Math.min(90, leftPct)));
+      }
+      function closeDrag() {
+        document.onmouseup = null;
+        document.onmousemove = null;
+        saveDataToCloud(appData);
+      }
+      document.onmousemove = elementDrag;
+      document.onmouseup = closeDrag;
+    }
+
+    function dragTouchStart(e, elemId) {
+      const blueprint = document.getElementById('house-blueprint');
+      const rect = blueprint.getBoundingClientRect();
+      function elementTouchMove(ev) {
+        const touch = ev.touches[0];
+        let leftPct = ((touch.clientX - rect.left) / rect.width) * 100;
+        let topPct = ((touch.clientY - rect.top) / rect.height) * 100;
+        updateElementPosition(elemId, Math.max(5, Math.min(92, topPct)), Math.max(5, Math.min(90, leftPct)));
+      }
+      function closeTouch() {
+        document.ontouchend = null;
+        document.ontouchmove = null;
+        saveDataToCloud(appData);
+      }
+      document.ontouchmove = elementTouchMove;
+      document.ontouchend = closeTouch;
+    }
+
+    function updateElementPosition(id, top, left) {
+      appData.elements = appData.elements.map(e => e.id === id ? { ...e, top, left } : e);
+      renderInteractiveElements();
+    }
+
+    function renderMembersStatus() {
+      const container = document.getElementById('members-status-container');
+      if (!container) return;
+
+      const members = appData.members || ['Matheus', 'Eliziane', 'Fernando', 'Wilker'];
+      const mData = appData.membersData || {};
+      const statusOptions = ['Ocupado', 'No Computador', 'Tomando banho', 'Cumprindo alguma tarefa', 'Fora de casa'];
+
+      container.innerHTML = members.map(m => {
+        const info = mData[m] || { location: 'Em casa', status: 'Ocupado' };
+
+        return `
+          <div class="bg-slate-900 border border-slate-700/80 p-4 rounded-xl space-y-3">
+            <div class="flex items-center space-x-3">
+              <div class="w-10 h-10 rounded-full bg-indigo-600/25 border border-indigo-500/40 text-indigo-300 flex items-center justify-center font-bold text-sm">
+                ${m.charAt(0)}
+              </div>
+              <h4 class="text-sm font-bold text-white">${m}</h4>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2 pt-1">
+              <div>
+                <label class="block text-[10px] text-slate-400 mb-1">Presença</label>
+                <select onchange="updateMemberLocation('${m}', this.value)" class="w-full bg-slate-800 border border-slate-700 text-xs text-slate-200 rounded-lg px-2 py-1.5 focus:outline-none">
+                  <option value="Em casa" ${info.location === 'Em casa' ? 'selected' : ''}>Em casa</option>
+                  <option value="Fora de casa" ${info.location === 'Fora de casa' ? 'selected' : ''}>Fora de casa</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-[10px] text-slate-400 mb-1">Status</label>
+                <select onchange="updateMemberStatus('${m}', this.value)" class="w-full bg-slate-800 border border-slate-700 text-xs text-slate-200 rounded-lg px-2 py-1.5 focus:outline-none">
+                  ${statusOptions.map(st => `<option value="${st}" ${info.status === st ? 'selected' : ''}>${st}</option>`).join('')}
+                </select>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderTasks() {
+      const list = document.getElementById('tasks-list');
+      if (!list) return;
+      const tasks = appData.tasks || [];
+      const pendingCount = tasks.filter(t => !t.done).length;
+
+      const badge = document.getElementById('badge-tasks');
+      if (badge) {
+        if (pendingCount > 0) { badge.innerText = pendingCount; badge.classList.remove('hidden'); }
+        else { badge.classList.add('hidden'); }
+      }
+
+      if (tasks.length === 0) {
+        list.innerHTML = `<div class="text-center py-8 text-slate-500 text-xs">Nenhuma tarefa cadastrada.</div>`;
+        return;
+      }
+
+      list.innerHTML = tasks.map(t => `
+        <div class="flex items-center justify-between p-3 rounded-xl border ${t.done ? 'bg-slate-900/40 border-slate-800 opacity-60' : 'bg-slate-800 border-slate-700'} transition">
+          <div class="flex items-center space-x-3 cursor-pointer" onclick="toggleTask('${t.id}')">
+            <div class="w-5 h-5 rounded-md border flex items-center justify-center transition ${t.done ? 'bg-emerald-500 border-emerald-500 text-slate-950' : 'border-slate-600 bg-slate-900'}">
+              ${t.done ? '<i class="fa-solid fa-check text-xs"></i>' : ''}
+            </div>
+            <p class="text-sm font-semibold ${t.done ? 'line-through text-slate-400' : 'text-slate-100'}">${t.title}</p>
+          </div>
+          <button onclick="deleteTask('${t.id}')" class="text-slate-500 hover:text-rose-400 p-1 transition">
+            <i class="fa-solid fa-trash-can text-sm"></i>
+          </button>
+        </div>
+      `).join('');
+    }
+
+    function renderFridge() {
+      const grid = document.getElementById('fridge-grid');
+      if (!grid) return;
+      const items = appData.fridgeItems || [];
+      if (items.length === 0) {
+        grid.innerHTML = `<div class="col-span-full text-center py-8 text-slate-500 text-xs">Geladeira vazia.</div>`;
+        return;
+      }
+      grid.innerHTML = items.map(item => `
+        <div class="bg-slate-800 border border-slate-700/80 p-3 rounded-xl flex items-center justify-between">
+          <div class="flex items-center space-x-3">
+            <div class="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center text-base">
+              <i class="fa-solid fa-utensils"></i>
+            </div>
+            <div>
+              <h4 class="text-sm font-bold text-slate-100">${item.name}</h4>
+              <span class="text-[10px] bg-slate-700 px-1.5 py-0.5 rounded text-slate-300 font-medium">${item.qty}</span>
+            </div>
+          </div>
+          <button onclick="deleteFridgeItem('${item.id}')" class="text-slate-500 hover:text-rose-400 p-1.5 transition">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+      `).join('');
+    }
+
+    function renderShoppingList() {
+      const container = document.getElementById('shopping-list-container');
+      if (!container) return;
+      const list = appData.shoppingList || [];
+      if (list.length === 0) {
+        container.innerHTML = `<div class="text-center py-8 text-slate-500 text-xs">Nenhum item na lista de compras.</div>`;
+        return;
+      }
+      container.innerHTML = list.map(item => `
+        <div class="flex items-center justify-between p-3 rounded-xl border ${item.bought ? 'bg-slate-900/40 border-slate-800 opacity-60' : 'bg-slate-800 border-slate-700'} transition">
+          <div class="flex items-center space-x-3 cursor-pointer" onclick="toggleShoppingItem('${item.id}')">
+            <div class="w-5 h-5 rounded-md border flex items-center justify-center transition ${item.bought ? 'bg-sky-500 border-sky-500 text-slate-950' : 'border-slate-600 bg-slate-900'}">
+              ${item.bought ? '<i class="fa-solid fa-check text-xs"></i>' : ''}
+            </div>
+            <div>
+              <p class="text-sm font-semibold ${item.bought ? 'line-through text-slate-400' : 'text-slate-100'}">${item.name}</p>
+              <span class="text-[10px] text-sky-400 font-medium">Qtd: ${item.qty}</span>
+            </div>
+          </div>
+          <button onclick="deleteShoppingItem('${item.id}')" class="text-slate-500 hover:text-rose-400 p-1 transition">
+            <i class="fa-solid fa-trash-can text-sm"></i>
+          </button>
+        </div>
+      `).join('');
+    }
+
+    function renderCatFood() {
+      const lvl = appData.catFoodLevel !== undefined ? appData.catFoodLevel : 75;
+      const bar = document.getElementById('cat-food-bar');
+      const text = document.getElementById('cat-food-percentage');
+      if (bar) bar.style.width = `${lvl}%`;
+      if (text) text.innerText = `${lvl}%`;
+    }
+
+    function renderSecurityView() {
+      const isLocked = appData.gateLocked;
+      const qBtn = document.getElementById('quick-gate-btn');
+      const qIcon = document.getElementById('quick-gate-icon');
+      const qText = document.getElementById('quick-gate-text');
+
+      if (qBtn && qIcon && qText) {
+        if (isLocked) {
+          qBtn.className = "px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-2 transition bg-rose-500/20 text-rose-300 border border-rose-500/30";
+          qIcon.className = "fa-solid fa-lock";
+          qText.innerText = "Trancado";
+        } else {
+          qBtn.className = "px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-2 transition bg-emerald-500/20 text-emerald-300 border border-emerald-500/30";
+          qIcon.className = "fa-solid fa-lock-open";
+          qText.innerText = "Destrancado";
+        }
+      }
+
+      const badge = document.getElementById('gate-status-badge');
+      const icon = document.getElementById('gate-status-icon');
+      const title = document.getElementById('gate-status-title');
+      const desc = document.getElementById('gate-status-desc');
+
+      if (badge && icon && title) {
+        if (isLocked) {
+          badge.className = "px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-rose-500/20 text-rose-400 border border-rose-500/30";
+          badge.innerText = "Trancado";
+          icon.className = "fa-solid fa-lock text-rose-500";
+          title.innerText = "O Portão está TRANCADO";
+          desc.innerText = "Acesso seguro.";
+        } else {
+          badge.className = "px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
+          badge.innerText = "Destrancado";
+          icon.className = "fa-solid fa-lock-open text-emerald-400";
+          title.innerText = "O Portão está DESTRANCADO";
+          desc.innerText = "Atenção: Acesso livre.";
+        }
+      }
+    }
+
+    window.onload = function() {
+      switchTab('mapa');
+      if (typeof window.initFirebaseSyncModules === 'function') {
+        window.initFirebaseSyncModules();
+      }
+    };
+  </script>
+</body>
+</html>
